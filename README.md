@@ -1,35 +1,27 @@
-# AI Food Telegram Bot (Kurdish Sorani)
+# AI Food Super Pro Telegram Bot
 
-## Features
-- Receives a Telegram food photo.
-- Uses Gemini vision to estimate the food and approximate calorie range.
-- Lets the user specify portion size and oil.
-- Stores a history of estimates in SQLite.
-- Kurdish Sorani menu and replies.
+A Sorani Kurdish food assistant powered by Gemini. Features:
+- Analyze food photos and estimate calories and macros.
+- Ask food and nutrition questions in a ChatGPT-like text conversation.
+- Get simple meal and recipe ideas.
+- View recent meal history and a daily summary.
+- Delete your saved food history.
+- Refine a photo estimate with portion-size and oil buttons.
+- SQLite database with a safe migration from the earlier bot schema.
+- Retry temporary Gemini overload/rate-limit errors and compress images before upload.
 
-## Required GitHub Secrets
-- `BOT_TOKEN`: Telegram bot token from @BotFather.
-- `GEMINI_API_KEY`: Gemini API key from Google AI Studio.
-
-Never put tokens directly in `bot.py` or commit them to the repository.
-
-## Setup from a mobile phone
-1. Create a repository on GitHub.
-2. Upload `bot.py`, `requirements.txt`, and `.github/workflows/bot.yml` preserving the folder path.
-3. Open the repository: Settings → Secrets and variables → Actions → New repository secret.
-4. Add `BOT_TOKEN` and `GEMINI_API_KEY`.
-5. Open Actions, enable workflows if GitHub asks, then select “AI Food Telegram Bot” → Run workflow.
-6. Open Telegram and send `/start` to your bot.
-
-## Important hosting limitation
-GitHub Actions is a CI runner, not a 24/7 bot host. This workflow stops after about 5 hours 40 minutes and scheduled runs may be delayed. Therefore, the bot will be offline between runs and may miss a prompt response until it starts again. For reliable always-on polling, use an always-on hosting service or webhook host. Do not create multiple simultaneous polling runs with the same bot token.
-
-## Gemini free tier
-Availability, rate limits, and model names vary by region/account and can change. Check current Gemini API pricing and limits before relying on the free tier. If the configured model is no longer available to your key, change `GEMINI_MODEL` in the workflow to a currently supported vision model.
-
-## Privacy
-Food photos are sent to the configured AI provider for analysis. Do not send photos containing personal or sensitive information. The SQLite database stores estimates and Telegram user IDs in the runner's filesystem; GitHub-hosted runners are temporary, so history may be lost when the job ends. This demo does not upload the database as an artifact.
+## GitHub setup (mobile-friendly)
+1. Upload the files in this folder to your repository, keeping `.github/workflows/bot.yml` in that exact path.
+2. In repository Settings → Secrets and variables → Actions, create:
+   - `BOT_TOKEN`: Telegram token from BotFather.
+   - `GEMINI_API_KEY`: Gemini API key.
+   - `BOT_ACCESS_CODES`: one or more owner-created access codes separated by commas, for example `FOOD-A7K9,FOOD-P4M2`. Use unique, hard-to-guess codes and never publish them. Each code can authorize one Telegram account only.
+3. Open Actions → AI Food Super Pro → Run workflow.
+4. Open the bot in Telegram and send `/start`. Enter one access code when prompted. The same Telegram account will not be asked again while its saved authorization state remains available.
 
 ## Notes
-Calorie values are estimates from an image and can be significantly wrong because portion size, oil, ingredients, and cooking method are hard to determine visually. The bot does not provide medical advice or a daily calorie target.
-\n\n## خێراترکردن\n- وێنەکان پێش ناردن بۆ Gemini دەکرێنە JPEG ـی بچووکتر (تا 1280px).\n- داواکاری Gemini بە thinking level ـی low و وەڵامی JSON کورت دەکرێت.\n- شیکردنەوە لە thread ـێکی جیاواز دەچێت بۆ ئەوەی بۆتەکە لە کاتی چاوەڕوانیدا وەڵامی نامەکانی تر بدات.\n
+- The default model is `gemini-3.8-flash` in the workflow; change `GEMINI_MODEL` there if Google changes model availability.
+- Gemini free quotas and availability can vary. Retries help with temporary errors but cannot guarantee a response.
+- GitHub Actions is not permanent 24/7 hosting. A cache is used for the small, hashed one-time authorization state so it can usually carry between runs, but GitHub may evict caches; if that happens, a user may need a new unused code. Food history is still local to each runner and is not guaranteed to persist across runs. For guaranteed permanent login and history, use persistent hosting/storage.
+- Calories and macros from a photo are estimates, not medical measurements. The bot does not diagnose conditions or recommend extreme diets.
+- Never commit bot tokens or API keys to the repository.
