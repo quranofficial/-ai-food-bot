@@ -20,14 +20,6 @@ jobs:
       - name: Get source
         uses: actions/checkout@v4
 
-      - name: Restore one-time access state
-        uses: actions/cache@v4
-        with:
-          path: access_state.sqlite3*
-          key: access-state-${{ github.ref_name }}-${{ github.run_id }}
-          restore-keys: |
-            access-state-${{ github.ref_name }}-
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -43,21 +35,23 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          BOT_ACCESS_CODES: ${{ secrets.BOT_ACCESS_CODES }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           python - <<'PY'
           import os
-          missing = [key for key in ("BOT_TOKEN", "GEMINI_API_KEY", "BOT_ACCESS_CODES") if not os.getenv(key)]
-          if missing:
-              raise SystemExit("Missing GitHub Secrets: " + ", ".join(missing))
-          print("Required secrets are configured.")
+          if not os.getenv("BOT_TOKEN"):
+              raise SystemExit("Missing GitHub Secret: BOT_TOKEN")
+          if not os.getenv("GEMINI_API_KEY") and not os.getenv("GROQ_API_KEY"):
+              raise SystemExit("Add at least one of GEMINI_API_KEY or GROQ_API_KEY in GitHub Secrets.")
+          print("Telegram token and at least one AI key are configured.")
           PY
 
       - name: Run bot for a limited time
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          BOT_ACCESS_CODES: ${{ secrets.BOT_ACCESS_CODES }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: qwen/qwen3.8-27b
           GEMINI_MODEL: gemini-3.8-flash
           PYTHONUNBUFFERED: "1"
         run: |
