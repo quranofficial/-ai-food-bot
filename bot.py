@@ -3,6 +3,7 @@ import io
 import json
 import sqlite3
 import logging
+import time
 from datetime import datetime, timezone
 
 from telegram import (
@@ -134,15 +135,64 @@ def analyze_food(image_bytes, mime_type, portion="نادیار", oil="نادیا
 - بۆ وێنەی نەخواردن، بە ڕوونی بنووسە کە خواردن دیاری نەکراوە و ژمارەی کالۆری صفر دابنێ.
 - هیچ ڕێنمایی کەمکردنەوەی کێش، سنووری کالۆریی ڕۆژانە، یان ڕێژیمی توند پێشنیار مەکە.
 """
-    response = ai_client.models.generate_content(
-        model=MODEL_NAME,
-        contents=[
-            prompt,
-            types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
-        ],
-        config=types.GenerateContentConfig(temperature=0.2)
-    )
+    # Retry temporary Gemini overload / rate-limit errors with backoff.
+    response = None
+    for attempt in range(4):
+        try:
+            # Avoid temperature settings because newer Gemini models may not
+            # support legacy sampling parameters.
+            response = ai_client.models.generate_content(
+                model=MODEL_NAME,
+                contents=[
+                    prompt,
+                    types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+                ]
+            )
+            break
+        except Exception as exc:
+            error_text = str(exc).lower()
+            retryable = any(marker in error_text for marker in (
+                "503", "unavailable", "high demand", "429",
+                "resource_exhausted", "500", "internal server error",
+                "temporarily", "deadline exceeded"
+            ))
+            if not retryable or attempt == 3:
+                raise
+            delay = 2 ** (attempt + 1)  # 2, 4, then 8 seconds
+            log.warning(
+                "Temporary Gemini error; retry %s/3 in %s seconds: %s",
+                attempt + 1, delay, str(exc)[:300]
+            )
+            time.sleep(delay)
+
+    if response is None or not getattr(response, "text", None):
+        raise RuntimeError("Gemini returned an empty response")
     return parse_json(response.text)
+
+
+def explain_ai_error(exc):
+    """Return a helpful Sorani message without exposing API credentials."""
+    message = str(exc).lower()
+    if any(x in message for x in ("503", "unavailable", "high demand", "500", "internal server error")):
+        return (
+            "سێرڤەری Gemini بە کاتی کێشەی هەیە، تەنانەت دوای چەند هەوڵێک. "
+            "تکایە چەند خولەکێک چاوەڕێ بکە و دووبارە وێنەکە بنێرە."
+        )
+    if any(x in message for x in ("429", "resource_exhausted", "quota", "rate limit")):
+        return (
+            "سنووری بەکارهێنان (quota) یان خێرایی داواکارییەکان پڕ بووە. "
+            "تکایە دواتر هەوڵ بدە و quota ـی Gemini API بپشکنە."
+        )
+    if any(x in message for x in ("401", "403", "api key", "permission denied", "unauthorized")):
+        return (
+            "کێشە لە API key یان مۆڵەتی Gemini هەیە. "
+            "لە GitHub Settings → Secrets and variables → Actions، "
+            "GEMINI_API_KEY بپشکنە؛ کلیلی نهێنی لە چاتدا مەینێرە."
+        )
+    return (
+        "نەتوانرا وێنەکە شیکاری بکرێت. تکایە دواتر هەوڵ بدە. "
+        "ئەگەر دووبارە بووەوە، کۆتا هەڵەی Actions بنێرە."
+    )
 
 def format_result(result):
     name = str(result.get("food_name", "خواردنی نەناسراو"))
@@ -230,10 +280,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as exc:
         log.exception("Photo analysis failed")
-        await message.reply_text(
-            "ببورە، نەمتوانی وێنەکە شیکەرەوە. تکایە دواتر هەوڵ بدە.\n"
-            "ئەگەر هەمان کێشە دووبارە بووەوە، API key و quota ـەکە بپشکنە."
-        )
+        await message.reply_text("ببورە، شیکردنەوە سەرکەوتوو نەبوو.\n\n" + explain_ai_error(exc))
 
 async def refine_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -277,9 +324,9 @@ async def refine_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["last_food_result"] = result
         save_result(update.effective_user.id, result)
         await query.message.reply_text(format_result(result))
-    except Exception:
+    except Exception as exc:
         log.exception("Refinement failed")
-        await query.message.reply_text("نوێکردنەوە سەرکەوتوو نەبوو. تکایە دواتر هەوڵ بدە.")
+        await query.message.reply_text("نوێکردنەوە سەرکەوتوو نەبوو.\n\n" + explain_ai_error(exc))
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
