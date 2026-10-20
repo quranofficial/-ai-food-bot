@@ -203,9 +203,12 @@ def generate_text(prompt, image_bytes=None, mime_type="image/jpeg", max_tokens=5
     except Exception as fallback_exc:
         log.exception("Groq fallback failed.")
         gemini_detail = str(last_exc)[:250] if last_exc else "Gemini API key is not configured"
+        # Keep provider errors clearly separated. Otherwise an old Gemini 503 in
+        # the combined string can hide the real Groq problem (missing key, 401, 404, 429).
+        groq_detail = str(fallback_exc)[:500]
         raise RuntimeError(
-            "Gemini و Groq هەردووکیان وەڵامیان نەدا. "
-            f"Gemini: {gemini_detail}; Groq: {str(fallback_exc)[:300]}"
+            "BOTH_AI_PROVIDERS_FAILED | "
+            f"GROQ_ERROR={groq_detail} | GEMINI_ERROR={gemini_detail}"
         ) from fallback_exc
 
 def optimize_image(image_bytes):
@@ -290,13 +293,36 @@ def format_result(result):
 
 def explain_ai_error(exc):
     message = str(exc).lower()
+
+    # If fallback was attempted, diagnose Groq first; do not mislabel the error
+    # using an earlier Gemini 503 when Groq actually failed for another reason.
+    if "both_ai_providers_failed" in message:
+        groq_part = message.split("groq_error=", 1)[1].split("| gemini_error=", 1)[0] if "groq_error=" in message else message
+        if any(x in groq_part for x in ("401", "invalid_api_key", "invalid api key", "unauthorized")):
+            return "Gemini و Groq کار نەکردن: کلیلی GROQ_API_KEY هەڵەیە یان دروست دانەنراوە. GitHub → Settings → Secrets and variables → Actions بپشکنە؛ کلیلی نهێنی مەینێرە."
+        if any(x in groq_part for x in ("403", "permission_denied", "forbidden")):
+            return "Gemini و Groq کار نەکردن: Groq مۆڵەتی ئەم داواکارییەی نییە. دۆخی API key و دەستگەیشتنی مۆدێل لە Groq Console بپشکنە."
+        if any(x in groq_part for x in ("404", "model_not_found", "not found")):
+            return "Gemini و Groq کار نەکردن: مۆدێلی Groq لەبەردەست نییە یان ناوی مۆدێل هەڵەیە. GROQ_MODEL لە workflow بپشکنە."
+        if any(x in groq_part for x in ("429", "rate_limit", "rate limit", "quota", "resource_exhausted")):
+            return "Gemini و Groq هەردووکیان بەردەست نین یان سنووری بەکارهێنانیان پڕ بووە. دواتر هەوڵ بدە و سنووری هەردوو API بپشکنە."
+        if any(x in groq_part for x in ("400", "bad_request", "invalid_request", "unsupported")):
+            return "Gemini و Groq کار نەکردن: شێوازی داواکاری یان مۆدێلی Groq پشتیوانی ناکرێت. کۆتا هێڵەکانی GitHub Actions بپشکنە."
+        if any(x in groq_part for x in ("503", "unavailable", "high demand", "500", "internal server error")):
+            return "Gemini و Groq هەردووکیان بە کاتی بەردەست نین. چەند خولەکێک دواتر دووبارە هەوڵ بدە."
+        return "Gemini و Groq هەردووکیان وەڵامیان نەدا. لە GitHub → Actions، هێڵەکانی 'Groq fallback failed' بپشکنە؛ API key ـەکانت مەینێرە."
+
+    if any(x in message for x in ("401", "invalid_api_key", "invalid api key", "api key", "unauthorized")):
+        return "کێشە لە API key هەیە. GitHub Settings → Secrets and variables → Actions پشکنە؛ کلیلی نهێنی مەینێرە."
+    if any(x in message for x in ("403", "permission denied", "forbidden")):
+        return "API ڕێگەی بە داواکارییەکە نەدا. مۆڵەت و ڕێکخستنی کلیلی API بپشکنە."
+    if any(x in message for x in ("404", "model_not_found", "not found")):
+        return "مۆدێلی AI نەدۆزرایەوە یان ناوی مۆدێل بەردەست نییە. ڕێکخستنی model لە workflow بپشکنە."
+    if any(x in message for x in ("429", "resource_exhausted", "quota", "rate limit")):
+        return "سنووری بەکارهێنانی AI پڕ بووە. دواتر هەوڵ بدە و quota ـی API بپشکنە."
     if any(x in message for x in ("503", "unavailable", "high demand", "500", "internal server error")):
         return "سێرڤەری AI بە کاتی قەرەباڵغە. تکایە چەند خولەکێک دواتر دووبارە هەوڵ بدە."
-    if any(x in message for x in ("429", "resource_exhausted", "quota", "rate limit")):
-        return "سنووری بەکارهێنان (quota) پڕ بووە یان داواکاری زۆرە. تکایە دواتر هەوڵ بدە و quota ـی Gemini API بپشکنە."
-    if any(x in message for x in ("401", "403", "api key", "permission denied", "unauthorized")):
-        return "کێشە لە API key یان مۆڵەتی Gemini هەیە. GitHub Settings → Secrets and variables → Actions پشکنە؛ کلیلی نهێنی مەینێرە."
-    return "نەتوانرا داواکارییەکە تەواو بکرێت. تکایە دواتر هەوڵ بدە؛ ئەگەر دووبارە بووەوە کۆتا هێڵەکانی Actions بنێرە."
+    return "نەتوانرا داواکارییەکە تەواو بکرێت. تکایە GitHub Actions → workflow logs بپشکنە؛ کلیلی نهێنی API مەینێرە."
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(
