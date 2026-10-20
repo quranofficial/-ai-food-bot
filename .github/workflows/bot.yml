@@ -1,4 +1,4 @@
-name: AI Food Telegram Bot
+name: AI Food Super Pro
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ai-food-telegram-bot
+  group: ai-food-super-pro
   cancel-in-progress: false
 
 jobs:
@@ -20,6 +20,14 @@ jobs:
       - name: Get source
         uses: actions/checkout@v4
 
+      - name: Restore one-time access state
+        uses: actions/cache@v4
+        with:
+          path: access_state.sqlite3*
+          key: access-state-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            access-state-${{ github.ref_name }}-
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -29,16 +37,17 @@ jobs:
       - name: Install packages
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
 
       - name: Check required secrets
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          BOT_ACCESS_CODES: ${{ secrets.BOT_ACCESS_CODES }}
         run: |
           python - <<'PY'
           import os
-          missing = [name for name in ("BOT_TOKEN", "GEMINI_API_KEY") if not os.getenv(name)]
+          missing = [key for key in ("BOT_TOKEN", "GEMINI_API_KEY", "BOT_ACCESS_CODES") if not os.getenv(key)]
           if missing:
               raise SystemExit("Missing GitHub Secrets: " + ", ".join(missing))
           print("Required secrets are configured.")
@@ -48,6 +57,7 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          BOT_ACCESS_CODES: ${{ secrets.BOT_ACCESS_CODES }}
           GEMINI_MODEL: gemini-3.8-flash
           PYTHONUNBUFFERED: "1"
         run: |
