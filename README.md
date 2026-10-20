@@ -1,27 +1,26 @@
-# AI Food Super Pro Telegram Bot
+# AI Food Super Pro — Gemini first, Groq fallback
 
-A Sorani Kurdish food assistant powered by Gemini. Features:
-- Analyze food photos and estimate calories and macros.
-- Ask food and nutrition questions in a ChatGPT-like text conversation.
-- Get simple meal and recipe ideas.
-- View recent meal history and a daily summary.
-- Delete your saved food history.
-- Refine a photo estimate with portion-size and oil buttons.
-- SQLite database with a safe migration from the earlier bot schema.
-- Retry temporary Gemini overload/rate-limit errors and compress images before upload.
+A Sorani Kurdish Telegram food assistant. For each AI request, it tries Gemini exactly once. If Gemini fails (including quota errors such as 429 or availability errors such as 503), it immediately tries Groq.
 
-## GitHub setup (mobile-friendly)
-1. Upload the files in this folder to your repository, keeping `.github/workflows/bot.yml` in that exact path.
-2. In repository Settings → Secrets and variables → Actions, create:
-   - `BOT_TOKEN`: Telegram token from BotFather.
-   - `GEMINI_API_KEY`: Gemini API key.
-   - `BOT_ACCESS_CODES`: one or more owner-created access codes separated by commas, for example `FOOD-A7K9,FOOD-P4M2`. Use unique, hard-to-guess codes and never publish them. Each code can authorize one Telegram account only.
-3. Open Actions → AI Food Super Pro → Run workflow.
-4. Open the bot in Telegram and send `/start`. Enter one access code when prompted. The same Telegram account will not be asked again while its saved authorization state remains available.
+## Features
+- Analyze food photos and estimate calories/macros.
+- Chat in Sorani about food and general nutrition.
+- Suggest simple meals and recipes.
+- View recent history and daily summary; delete personal history.
+- Refine photo estimates with portion/oil buttons.
+- Optimize image size and show clearer error messages.
 
-## Notes
-- The default model is `gemini-3.8-flash` in the workflow; change `GEMINI_MODEL` there if Google changes model availability.
-- Gemini free quotas and availability can vary. Retries help with temporary errors but cannot guarantee a response.
-- GitHub Actions is not permanent 24/7 hosting. A cache is used for the small, hashed one-time authorization state so it can usually carry between runs, but GitHub may evict caches; if that happens, a user may need a new unused code. Food history is still local to each runner and is not guaranteed to persist across runs. For guaranteed permanent login and history, use persistent hosting/storage.
-- Calories and macros from a photo are estimates, not medical measurements. The bot does not diagnose conditions or recommend extreme diets.
-- Never commit bot tokens or API keys to the repository.
+## GitHub setup (phone-friendly)
+1. Upload/replace these project files in your GitHub repository. Keep `.github/workflows/bot.yml` at exactly that path.
+2. Open repository Settings → Secrets and variables → Actions.
+3. Add `BOT_TOKEN` from Telegram BotFather.
+4. Add `GEMINI_API_KEY` for the first-choice AI and `GROQ_API_KEY` for automatic fallback. At least one AI key is required; for the requested fallback behavior, add both.
+5. Open Actions → AI Food Super Pro → Run workflow.
+
+## AI providers
+- Gemini is called once per request. If it errors or returns an empty answer, the bot immediately switches to Groq.
+- Groq fallback model defaults to `qwen/qwen3.8-27b`, which supports text and image inputs according to Groq's current vision docs. You can change `GROQ_MODEL` in the workflow if the provider changes availability.
+- Both providers have usage limits and can fail; fallback is not a guarantee of unlimited free access.
+
+## Important
+GitHub Actions is not 24/7 hosting and its local SQLite database may not persist across fresh runners. Food calories/macros from photos are estimates, not medical measurements. Never put API keys directly in source code or commit them to GitHub.

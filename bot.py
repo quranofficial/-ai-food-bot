@@ -8,8 +8,9 @@ import asyncio
 import sqlite3
 import logging
 import time
-import hashlib
-import hmac
+import base64
+import urllib.request
+import urllib.error
 from datetime import datetime, timezone, timedelta
 
 from telegram import (
@@ -18,7 +19,7 @@ from telegram import (
 )
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ContextTypes, filters, ApplicationHandlerStop
+    ContextTypes, filters
 )
 from google import genai
 from google.genai import types
@@ -33,20 +34,18 @@ log = logging.getLogger("ai_food_super_pro")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-# Comma-separated one-time access codes; configure only in GitHub Secrets.
-BOT_ACCESS_CODES = [x.strip() for x in os.getenv("BOT_ACCESS_CODES", "").split(",") if x.strip()]
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_MODEL = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b").strip()
 MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
 DB_PATH = os.getenv("DB_PATH", "food_history.sqlite3")
 MAX_IMAGE_BYTES = 15 * 1024 * 1024
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN لە GitHub Secrets دانەنراوە.")
-if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY لە GitHub Secrets دانەنراوە.")
-if not BOT_ACCESS_CODES:
-    raise RuntimeError("BOT_ACCESS_CODES لە GitHub Secrets دانەنراوە؛ کۆدی یەکجارە بە کۆما جیا بکەوە.")
+if not GEMINI_API_KEY and not GROQ_API_KEY:
+    raise RuntimeError("لانیکەم یەکێک لە GEMINI_API_KEY یان GROQ_API_KEY لە GitHub Secrets زیاد بکە.")
 
-ai_client = genai.Client(api_key=GEMINI_API_KEY)
+ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
@@ -102,90 +101,6 @@ def init_db():
             if column not in existing:
                 conn.execute(f"ALTER TABLE food_history ADD COLUMN {column} {sql_type}")
         conn.commit()
-    init_access_db()
-
-def access_db_connect():
-    conn = sqlite3.connect("access_state.sqlite3", timeout=20)
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
-
-def init_access_db():
-    with access_db_connect() as conn:
-        conn.execute("""CREATE TABLE IF NOT EXISTS authorized_users (
-            user_hash TEXT PRIMARY KEY,
-            authorized_at TEXT NOT NULL
-        )""")
-        conn.execute("""CREATE TABLE IF NOT EXISTS used_access_codes (
-            code_hash TEXT PRIMARY KEY,
-            user_hash TEXT NOT NULL,
-            used_at TEXT NOT NULL
-        )""")
-        conn.commit()
-
-def code_hash(code):
-    return hashlib.sha256(code.strip().encode("utf-8")).hexdigest()
-
-def user_hash(user_id):
-    # Store a salted hash, not the user's raw Telegram ID, in the auth-state cache.
-    return hashlib.sha256((BOT_TOKEN + ":" + str(user_id)).encode("utf-8")).hexdigest()
-
-def is_authorized(user_id):
-    with access_db_connect() as conn:
-        return conn.execute(
-            "SELECT 1 FROM authorized_users WHERE user_hash=?", (user_hash(user_id),)
-        ).fetchone() is not None
-
-def redeem_access_code(user_id, submitted_code):
-    """Redeem one owner-issued code once and bind it to one Telegram account."""
-    submitted_hash = code_hash(submitted_code)
-    allowed_hashes = {code_hash(code) for code in BOT_ACCESS_CODES}
-    if not any(hmac.compare_digest(submitted_hash, allowed) for allowed in allowed_hashes):
-        return False
-    uid_hash = user_hash(user_id)
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with access_db_connect() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        if conn.execute("SELECT 1 FROM authorized_users WHERE user_hash=?", (uid_hash,)).fetchone():
-            conn.commit()
-            return True
-        if conn.execute("SELECT 1 FROM used_access_codes WHERE code_hash=?", (submitted_hash,)).fetchone():
-            conn.commit()
-            return False
-        conn.execute("INSERT INTO used_access_codes(code_hash, user_hash, used_at) VALUES (?, ?, ?)",
-                     (submitted_hash, uid_hash, now))
-        conn.execute("INSERT INTO authorized_users(user_hash, authorized_at) VALUES (?, ?)",
-                     (uid_hash, now))
-        conn.commit()
-    return True
-
-async def access_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ask for a single-use code before any bot feature can be used."""
-    user = update.effective_user
-    message = update.effective_message
-    query = update.callback_query
-    if user is None:
-        raise ApplicationHandlerStop
-    if is_authorized(user.id):
-        return
-    if query is not None:
-        await query.answer("سەرەتا کۆدی دەستگەیشتن داخل بکە.", show_alert=True)
-        raise ApplicationHandlerStop
-    if message is None:
-        raise ApplicationHandlerStop
-    text = (message.text or "").strip()
-    if text and not text.startswith("/") and redeem_access_code(user.id, text):
-        await message.reply_text(
-            "✅ کۆدەکە دروست بوو و دەستگەیشتنت چالاک کرا. ئەم کۆدە تەنها بۆ تۆ بەکارهاتووە؛ "
-            "لە جارەکانی دواتردا پێویست ناکات دووبارە بیخەیتەوە.\n\n" +
-            "بەخێربێیت بۆ AI Food Super Pro 🍽️",
-            reply_markup=MAIN_KEYBOARD
-        )
-        raise ApplicationHandlerStop
-    await message.reply_text(
-        "🔐 بۆ بەکارهێنانی بۆتەکە، کۆدی تایبەتی دەستگەیشتن داخل بکە.\n\n"
-        "هەر کۆدێک تەنها یەک کەس دەتوانێت بەکاریبهێنێت. ئەگەر کۆدت نییە، داوای لە بەڕێوەبەری بۆتەکە بکە."
-    )
-    raise ApplicationHandlerStop
 
 def safe_int(value):
     try:
@@ -218,12 +133,52 @@ def retryable_error(exc):
         "service unavailable"
     ))
 
-def generate_text(prompt, image_bytes=None, mime_type="image/jpeg", max_tokens=500):
-    contents = [prompt]
+def groq_fallback(prompt, image_bytes=None, mime_type="image/jpeg", max_tokens=500):
+    """Fallback provider used only after Gemini attempts fail; needs GROQ_API_KEY."""
+    if not GROQ_API_KEY:
+        raise RuntimeError(
+            "Gemini دوای ٥ هەوڵ سەرکەوتوو نەبوو و GROQ_API_KEY دانەنراوە. "
+            "لە GitHub Secrets ـدا GROQ_API_KEY زیاد بکە."
+        )
+    content = [{"type": "text", "text": prompt}]
     if image_bytes is not None:
-        contents.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+        content.append({"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{encoded}"}})
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [{"role": "user", "content": content}],
+        "max_completion_tokens": max_tokens,
+        "temperature": 0.2,
+    }
+    request = urllib.request.Request(
+        "https://api.groq.com/openai/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=75) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        answer = data["choices"][0]["message"]["content"]
+        if isinstance(answer, list):
+            answer = "".join(part.get("text", "") for part in answer if isinstance(part, dict))
+        answer = str(answer or "").strip()
+        if not answer:
+            raise RuntimeError("Groq وەڵامی بەتاڵی گەڕاندەوە.")
+        log.warning("Fallback AI (Groq) answered successfully.")
+        return answer
+    except urllib.error.HTTPError as exc:
+        details = exc.read().decode("utf-8", errors="replace")[:500]
+        raise RuntimeError(f"Groq fallback error HTTP {exc.code}: {details}") from exc
+
+
+def generate_text(prompt, image_bytes=None, mime_type="image/jpeg", max_tokens=500):
+    """Try Gemini exactly once; if it fails, immediately use Groq as fallback."""
     last_exc = None
-    for attempt in range(3):
+    if ai_client is not None:
+        contents = [prompt]
+        if image_bytes is not None:
+            contents.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
         try:
             config = types.GenerateContentConfig(
                 max_output_tokens=max_tokens,
@@ -233,17 +188,25 @@ def generate_text(prompt, image_bytes=None, mime_type="image/jpeg", max_tokens=5
                 model=MODEL_NAME, contents=contents, config=config
             )
             answer = (getattr(response, "text", None) or "").strip()
-            if not answer:
-                raise RuntimeError("Gemini returned an empty response")
-            return answer
+            if answer:
+                log.info("Gemini answered successfully.")
+                return answer
+            raise RuntimeError("Gemini returned an empty response")
         except Exception as exc:
             last_exc = exc
-            if not retryable_error(exc) or attempt == 2:
-                raise
-            delay = (1.5, 3.0)[attempt] if attempt < 2 else 3.0
-            log.warning("Temporary Gemini error; retry %s/2 in %.1f seconds.", attempt + 1, delay)
-            time.sleep(delay)
-    raise last_exc
+            log.warning("Gemini failed on its single attempt; switching to Groq: %s", str(exc)[:350])
+    else:
+        log.warning("GEMINI_API_KEY is not configured; using Groq directly.")
+
+    try:
+        return groq_fallback(prompt, image_bytes, mime_type, max_tokens)
+    except Exception as fallback_exc:
+        log.exception("Groq fallback failed.")
+        gemini_detail = str(last_exc)[:250] if last_exc else "Gemini API key is not configured"
+        raise RuntimeError(
+            "Gemini و Groq هەردووکیان وەڵامیان نەدا. "
+            f"Gemini: {gemini_detail}; Groq: {str(fallback_exc)[:300]}"
+        ) from fallback_exc
 
 def optimize_image(image_bytes):
     """Reduce upload size and processing time while preserving useful food detail."""
@@ -533,8 +496,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 def main():
     init_db()
     app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(MessageHandler(filters.ALL, access_gate), group=-1)
-    app.add_handler(CallbackQueryHandler(access_gate), group=-1)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("history", history))
@@ -545,7 +506,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_refinement, pattern=r"^(portion|oil):"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_error_handler(error_handler)
-    log.info("AI Food Super Pro starting with model %s and one-time access-code gate enabled", MODEL_NAME)
+    log.info("AI Food Super Pro starting with model %s", MODEL_NAME)
     app.run_polling(drop_pending_updates=False)
 
 if __name__ == "__main__":
