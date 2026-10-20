@@ -1,0 +1,44 @@
+name: AI Food Telegram Bot
+
+on:
+  workflow_dispatch:
+  # Optional: starts a run every 6 hours, but GitHub scheduled jobs are not
+  # guaranteed to start on time and this is NOT continuous hosting.
+  schedule:
+    - cron: "17 */6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-food-telegram-bot
+  cancel-in-progress: false
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Get source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install packages
+        run: pip install -r requirements.txt
+
+      - name: Run bot for a limited time
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-2.5-flash
+        run: |
+          python bot.py &
+          BOT_PID=$!
+          # Stop before the GitHub Actions job timeout.
+          sleep 20400
+          kill "$BOT_PID" || true
