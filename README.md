@@ -32,3 +32,4 @@ Food photos are sent to the configured AI provider for analysis. Do not send pho
 
 ## Notes
 Calorie values are estimates from an image and can be significantly wrong because portion size, oil, ingredients, and cooking method are hard to determine visually. The bot does not provide medical advice or a daily calorie target.
+\n\n## خێراترکردن\n- وێنەکان پێش ناردن بۆ Gemini دەکرێنە JPEG ـی بچووکتر (تا 1280px).\n- داواکاری Gemini بە thinking level ـی low و وەڵامی JSON کورت دەکرێت.\n- شیکردنەوە لە thread ـێکی جیاواز دەچێت بۆ ئەوەی بۆتەکە لە کاتی چاوەڕوانیدا وەڵامی نامەکانی تر بدات.\n

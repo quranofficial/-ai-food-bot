@@ -1,6 +1,7 @@
 import os
 import io
 import json
+import asyncio
 import sqlite3
 import logging
 import time
@@ -16,6 +17,7 @@ from telegram.ext import (
 )
 from google import genai
 from google.genai import types
+from PIL import Image
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -109,32 +111,35 @@ def parse_json(text):
 
 def analyze_food(image_bytes, mime_type, portion="نادیار", oil="نادیار"):
     prompt = f"""
-تۆ یاریدەدەری ناسینەوەی خواردنیت. وێنەکە تەنها بە شێوەی خەمڵاندن شیکەرەوە.
-زمانی وەڵام: کوردیی سۆرانی.
-بڕی خواردن: {portion}
-ڕۆن/چەوری زیادکراو: {oil}
-
-بە JSON ـی تەنها و بێ دەقی دەرەوە وەڵام بدە:
+شیکاری وێنەی خواردن بکە و تەنها JSON ـی کورت بە کوردیی سۆرانی بگەڕێنەوە.
+بڕ: {portion}. ڕۆن/کەرە: {oil}.
+شێوە:
 {{
- "food_name": "ناوی خواردن بە کوردی",
+ "food_name": "ناوی خواردن",
  "confidence": "بەرز/مامناوەند/نزم",
- "portion_assumption": "چۆن بڕەکەت خەمڵاندووە",
+ "portion_assumption": "خەمڵاندنی بڕ",
  "calories_min": 100,
  "calories_max": 200,
- "protein_g": "خەمڵاندنی گرام یان نادیار",
- "carbs_g": "خەمڵاندنی گرام یان نادیار",
- "fat_g": "خەمڵاندنی گرام یان نادیار",
- "question": "ئەگەر زانیارییەکی گرنگ نادیارە، پرسیارێکی کورت؛ ئەگەر نا، بەتاڵ",
- "notes": "هۆکارە سەرەکییەکانی نادڵنیایی"
+ "protein_g": "ژمارە یان نادیار",
+ "carbs_g": "ژمارە یان نادیار",
+ "fat_g": "ژمارە یان نادیار",
+ "question": "پرسیارێکی کورت یان بەتاڵ",
+ "notes": "تێبینیی کورت"
 }}
-
-ڕێنمایی گرنگ:
-- کالۆری و ماکرۆکان تەنها خەمڵاندنن؛ ژمارەکان بە وردیی پزیشکی مەناسێنە.
-- ئەگەر جۆری خواردن ڕوون نییە، confidence نزم بنووسە و پرسیار بکە.
-- لە وێنەوە بڕ و پێکهاتە بە دڵنیایی نازانرێت؛ ئەمە لە notes ڕوون بکەرەوە.
-- بۆ وێنەی نەخواردن، بە ڕوونی بنووسە کە خواردن دیاری نەکراوە و ژمارەی کالۆری صفر دابنێ.
-- هیچ ڕێنمایی کەمکردنەوەی کێش، سنووری کالۆریی ڕۆژانە، یان ڕێژیمی توند پێشنیار مەکە.
+کالۆری و ماکرۆکان خەمڵاندنن، نە پێوانەی ورد. ئەگەر خواردن دیار نییە confidence نزم بنووسە. بۆ وێنەی نەخواردن، کالۆری 0 بنووسە. هیچ ڕێنمایی ڕێژیمی توند یان کەمکردنەوەی کێش مەدە.
 """
+    # Downscale/compress before sending to reduce upload and image-processing time.
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            img = img.convert("RGB")
+            img.thumbnail((1280, 1280))
+            compressed = io.BytesIO()
+            img.save(compressed, format="JPEG", quality=78, optimize=True)
+            image_bytes = compressed.getvalue()
+            mime_type = "image/jpeg"
+    except Exception:
+        pass
+
     # Retry temporary Gemini overload / rate-limit errors with backoff.
     response = None
     for attempt in range(4):
@@ -146,7 +151,12 @@ def analyze_food(image_bytes, mime_type, portion="نادیار", oil="نادیا
                 contents=[
                     prompt,
                     types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
-                ]
+                ],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    max_output_tokens=450,
+                    thinking_config=types.ThinkingConfig(thinking_level="low")
+                )
             )
             break
         except Exception as exc:
@@ -268,7 +278,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(image_bytes) > 15 * 1024 * 1024:
             await message.reply_text("وێنەکە زۆر گەورەیە. تکایە وێنەیەکی بچووکتر بنێرە.")
             return
-        result = analyze_food(image_bytes, "image/jpeg")
+        result = await asyncio.to_thread(analyze_food, image_bytes, "image/jpeg")
         context.user_data["last_food_image"] = image_bytes
         context.user_data["last_food_result"] = result
         context.user_data["last_food_mime"] = "image/jpeg"
@@ -315,7 +325,8 @@ async def refine_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.message.reply_text("🔄 بە زانیاریی نوێ خەمڵاندنەکە نوێ دەکەمەوە...")
     try:
-        result = analyze_food(
+        result = await asyncio.to_thread(
+            analyze_food,
             context.user_data["last_food_image"],
             context.user_data.get("last_food_mime", "image/jpeg"),
             portion=portion,
